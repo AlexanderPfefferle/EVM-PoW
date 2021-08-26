@@ -1,0 +1,3 @@
+[submodule "vandal"]
+	path = vandal
+	url = https://github.com/usyd-blockchain/vandal.git
