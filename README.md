@@ -31,7 +31,7 @@ There are 4 different example contracts, which got compiled, modified and deploy
 + [Prime](contracts/Prime.sol) deployed on [Rinkeby](https://rinkeby.etherscan.io/address/0x4fb1081515adb5ac2a2380a44f78998cd0c30d13) with parameter `39`
 + [CoPrime](contracts/CoPrime.sol) deployed on [Rinkeby](https://rinkeby.etherscan.io/address/0x8efa60b96ce2d8a52f5de721ab9e48771f14379c) with parameter `36, 24`
 + [SortedArray](contracts/SortedArray.sol) deployed on [Rinkeby](https://rinkeby.etherscan.io/address/0xd854ebd94333d6b53827f9e6ab80b4d6b749710d) with parameter `[1, 2, 3, 4, 5, 6, 8, 7, 20, 24, 22, 34, 55]`
-+ [SymmetricArray](contracts/SymmetricArrays.sol) deployed on [Rinkeby](https://rinkeby.etherscan.io/address/0x6d185fb1f48f594480c256be4b8237ed7cc8fbf2) with parameter 
++ [SymmetricMatrix](contracts/SymmetricMatrix.sol) deployed on [Rinkeby](https://rinkeby.etherscan.io/address/0x6d185fb1f48f594480c256be4b8237ed7cc8fbf2) with parameter 
 
 ```
 [[1, 4, 5, 2],
