@@ -191,14 +191,6 @@ def assemble(op_list):
 mht = assemble(make_hash_of_top)
 mhbt = assemble(make_hash_of_below_top)
 
-def get_payload_size():
-    sz=0
-    for instruction in payload:
-        _,b,_=instruction
-        sz+=1+len(b)
-    return sz
-
-
 # make sure all PUSHs that put a jumpdest address on the stack are PUSH2;
 # 2 bytes are enought to cover the largest possible PCs,
 # there might have been PUSH1s before, but 1 byte might not be enough after
