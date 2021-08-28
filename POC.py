@@ -1,4 +1,5 @@
 import argparse
+from copy import deepcopy
 from opcodes import *
 
 if __name__ == '__main__':
@@ -63,7 +64,9 @@ p, constructor = p[constructor_end_index:], p[:constructor_end_index]
 # move initial FMP
 p[0][1]=["C0"]
 
-# reassemble
+# reassemble the list of operations back to bytecode
+# this also replaces the labels for JUMPDESTs and their
+# corresponding pushes with addresses again
 def reassemble(p):
     new_bytecode=""
     new_jump_dests=dict()
@@ -86,6 +89,7 @@ def reassemble(p):
     return new_bytecode
 
 import os
+# run vandal, only works on linux this way
 os.system('(echo "%s" | vandal/bin/decompile -t vo -n -v) > /dev/null 2>&1'%reassemble(p))
 
 # find jump dests, assign them labels
@@ -113,7 +117,8 @@ for x in range(1,len(p)):
             unsolved_jump_pcs+=[i+1]
     i+=1+len(p_params)
 
-# fix dynamic jumps
+# assign labels to dynamic jumps
+# requires running vandal and parsing the output files
 from vandal_parser import *
 unsolved_push_pcs=[]
 for x in unsolved_jump_pcs:
@@ -132,7 +137,8 @@ block_ranges=[]
 for block in func_to_blocks['0x'+funcsighash.lower()]:
     i = blocks_list.index(block)
     block_ranges.append((block,blocks_list[i+1]-1))
-# ---
+# find all the JUMPDESTs where we return from an internal function call,
+# since we want to include these return values in the hash as well
 internal_function_call_returns=[]
 i=0
 for x in range(len(p)):
@@ -148,9 +154,9 @@ for x in range(len(p)):
        and old_address_to_label.get(current_block_end+1,0)==lbl and opcodes[op]["name"][:4]=="PUSH":
         internal_function_call_returns+=[i]
     i+=1+len(params)
-# --
-from copy import deepcopy
 
+
+# create the code we will inject
 make_hash_of_top=[
     # put value on stack
     ["DUP1"], # [V]
@@ -166,6 +172,8 @@ make_hash_of_top=[
     ['MSTORE'], # []
 ]
 
+# the code for updating the hash with the value below the top of the stack is
+# basically the same except DUP2 instead of DUP1 in the beginning
 make_hash_of_below_top=deepcopy(make_hash_of_top)
 make_hash_of_below_top[0][0]="DUP2"
 
@@ -191,6 +199,10 @@ def get_payload_size():
     return sz
 
 
+# make sure all PUSHs that put a jumpdest address on the stack are PUSH2;
+# 2 bytes are enought to cover the largest possible PCs,
+# there might have been PUSH1s before, but 1 byte might not be enough after
+# injecting additional code
 def make_pushes_big():
     for x in range(len(p)):
         op,params,lbl=p[x]
@@ -253,7 +265,7 @@ new_bytecode=reassemble(p)
 
 def fix_constructor(new_code_size):
     new_constructor_bytecode=""
-    # fixing last CODECOPY
+    # find PUSHs of last CODECOPY
     for x in range(len(constructor)-1,-1,-1):
         op,params,lbl=constructor[x]
         if opcodes[op]["name"] == "CODECOPY":
@@ -264,7 +276,7 @@ def fix_constructor(new_code_size):
             constructor[x-4][2]="CS"
             constructor[x-4][1]=["00","00"]
             break
-    # fixing first CODECOPY
+    # find PUSHs of first CODECOPY
     for x in range(len(constructor)):
         op,params,lbl=constructor[x]
         if opcodes[op]["name"] == "CODECOPY":
@@ -275,12 +287,12 @@ def fix_constructor(new_code_size):
             constructor[x-6][2]="CL+CS"
             constructor[x-6][1]=["00","00"]
             break
-
+    # calculate length of the new constructor
     new_constructor_length = 0
     for x in range(len(constructor)):
         op,params,lbl=constructor[x]
         new_constructor_length += 1 + len(params)
-
+    # update the values for the PUSHs accordingly
     for x in range(len(constructor)):
         op,params,lbl=constructor[x]
         new_constructor_bytecode += op
