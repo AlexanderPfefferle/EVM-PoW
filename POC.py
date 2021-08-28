@@ -27,19 +27,17 @@ lbl_index=0
 jumpdests=[]
 pushes=[]
 
-
-c=0
-p=[]
-i=0
-
 old_address_to_label=dict()
 
+contract=[]
 # disassemble
+c=0
+i=0
 while c<len(byte_array):
     op=byte_array[c]
     extra=opcodes[op]["extra_in"]
     params=byte_array[c+1:c+1+extra]
-    p+=[[op, params, None]]
+    contract+=[[op, params, None]]
     c+=extra+1
     i+=1+len(params)
 
@@ -47,40 +45,40 @@ while c<len(byte_array):
 i=0
 constructor_length=None
 constructor_end_index=None
-for x in range(len(p)):
-    if opcodes[p[x][0]]["name"]=="CODECOPY":
-        constructor_length=int(''.join(p[x-2][1]),16)
-    i+=1+len(p[x][1])
+for x in range(len(contract)):
+    if opcodes[contract[x][0]]["name"]=="CODECOPY":
+        constructor_length=int(''.join(contract[x-2][1]),16)
+    i+=1+len(contract[x][1])
 
 i=0
-for x in range(len(p)):
+for x in range(len(contract)):
     if i==constructor_length:
         constructor_end_index=x
         break
-    i+=1+len(p[x][1])
+    i+=1+len(contract[x][1])
 
-p, constructor = p[constructor_end_index:], p[:constructor_end_index]
+contract, constructor = contract[constructor_end_index:], contract[:constructor_end_index]
 
 # move initial FMP
-p[0][1]=["C0"]
+contract[0][1]=["C0"]
 
 # reassemble the list of operations back to bytecode
 # this also replaces the labels for JUMPDESTs and their
 # corresponding pushes with addresses again
-def reassemble(p):
+def reassemble(contract):
     new_bytecode=""
     new_jump_dests=dict()
     i=0
     # find new lbl positions
-    for x in range(len(p)):
-        op,params,lbl=p[x]
+    for x in range(len(contract)):
+        op,params,lbl=contract[x]
         if lbl and opcodes[op]["name"] == "JUMPDEST":
             new_jump_dests[lbl]=i
         i+=1+len(params)
     i=0
     # adjust pushes to the correspd lbl
-    for x in range(len(p)):
-        op,params,lbl=p[x]
+    for x in range(len(contract)):
+        op,params,lbl=contract[x]
         new_bytecode += op
         if lbl and opcodes[op]["name"] != "JUMPDEST":
             new_bytecode += set_leading_zeros(new_jump_dests[lbl])
@@ -90,14 +88,14 @@ def reassemble(p):
 
 import os
 # run vandal, only works on linux this way
-os.system('(echo "%s" | vandal/bin/decompile -t vo -n -v) > /dev/null 2>&1'%reassemble(p))
+os.system('(echo "%s" | vandal/bin/decompile -t vo -n -v) > /dev/null 2>&1'%reassemble(contract))
 
 # find jump dests, assign them labels
 i=0
-for x in range(len(p)):
-    op,params,_ = p[x]
+for x in range(len(contract)):
+    op,params,_ = contract[x]
     if opcodes[op]["name"]=="JUMPDEST":
-        p[x][2]="LBL%d"%lbl_index
+        contract[x][2]="LBL%d"%lbl_index
         old_address_to_label[i]="LBL%d"%lbl_index
         lbl_index+=1
     i+=1+len(params)
@@ -107,12 +105,12 @@ unsolved_jump_pcs=[]
 
 # assign labels to static jumps
 i=0
-for x in range(1,len(p)):
-    p_op,p_params,p_lbl = p[x-1]
-    op,params,lbl = p[x]
+for x in range(1,len(contract)):
+    p_op,p_params,p_lbl = contract[x-1]
+    op,params,lbl = contract[x]
     if (opcodes[op]["name"] in {"JUMP", "JUMPI"}):
         if opcodes[p_op]["name"][:4] == "PUSH":
-            p[x-1][2]=old_address_to_label[int(''.join(p_params),16)]
+            contract[x-1][2]=old_address_to_label[int(''.join(p_params),16)]
         else:
             unsolved_jump_pcs+=[i+1]
     i+=1+len(p_params)
@@ -125,12 +123,12 @@ for x in unsolved_jump_pcs:
     unsolved_push_pcs+=jumppc_to_pushpc(x)
 
 i=0
-for x in range(0,len(p)):
-    op,params,lbl = p[x]
+for x in range(0,len(contract)):
+    op,params,lbl = contract[x]
     if i in unsolved_push_pcs:
         unsolved_push_pcs.remove(i)
         if opcodes[op]["name"][:4]=="PUSH" and int(''.join(params),16) in old_address_to_label.keys():
-            p[x][2]=old_address_to_label[int(''.join(params),16)]
+            contract[x][2]=old_address_to_label[int(''.join(params),16)]
     i+=1+len(params)
 
 block_ranges=[]
@@ -141,8 +139,8 @@ for block in func_to_blocks['0x'+funcsighash.lower()]:
 # since we want to include these return values in the hash as well
 internal_function_call_returns=[]
 i=0
-for x in range(len(p)):
-    op,params,lbl = p[x]
+for x in range(len(contract)):
+    op,params,lbl = contract[x]
     current_block_start=None
     current_block_end=None
     for l1,l2 in block_ranges:
@@ -196,12 +194,12 @@ mhbt = assemble(make_hash_of_below_top)
 # there might have been PUSH1s before, but 1 byte might not be enough after
 # injecting additional code
 def make_pushes_big():
-    for x in range(len(p)):
-        op,params,lbl=p[x]
+    for x in range(len(contract)):
+        op,params,lbl=contract[x]
         if lbl and opcodes[op]["name"] != "JUMPDEST":
-            p[x][0]=name_to_op["PUSH2"]
+            contract[x][0]=name_to_op["PUSH2"]
             cparam=set_leading_zeros(int(''.join(params),16))
-            p[x][1]=[cparam[i]+cparam[i+1] for i in range(0,4,2)]
+            contract[x][1]=[cparam[i]+cparam[i+1] for i in range(0,4,2)]
 
 
 # opcodes where we want to take the hash of the top of the stack,
@@ -229,31 +227,31 @@ pre2_ops={
 }
 
 def inject_code():
-    new_p=[]
+    new_contract=[]
     i=0
-    for x in range(len(p)):
-        op,params,lbl = p[x]
+    for x in range(len(contract)):
+        op,params,lbl = contract[x]
         if any(l1 <= i <= l2 for l1,l2 in block_ranges):
             # compute hash update before executing the respective opcode
             if opcodes[op]['name'] in pre_ops:
-                new_p+=mht
+                new_contract+=mht
             if opcodes[op]['name'] in pre2_ops:
-                new_p+=mhbt
-        new_p+=[[op,params,lbl]]
+                new_contract+=mhbt
+        new_contract+=[[op,params,lbl]]
         if any(l1 <= i <= l2 for l1,l2 in block_ranges):
             # compute hash update after executing the respective opcode
             if opcodes[op]['name'] in post_ops:
-                new_p+=mht
+                new_contract+=mht
         # compute hash update after returning from internal function call
         if i in internal_function_call_returns:
-            new_p+=mht
+            new_contract+=mht
         i+=1+len(params)
-    return new_p
+    return new_contract
 
-p=inject_code()
+contract=inject_code()
 make_pushes_big()
 
-new_bytecode=reassemble(p)
+new_bytecode=reassemble(contract)
 
 def fix_constructor(new_code_size):
     new_constructor_bytecode=""
