@@ -1,4 +1,5 @@
 import argparse
+import os
 from copy import deepcopy
 from opcodes import *
 
@@ -86,9 +87,8 @@ def reassemble(contract):
             new_bytecode += ''.join(params)
     return new_bytecode
 
-import os
 # run vandal, only works on linux this way
-os.system('(echo "%s" | vandal/bin/decompile -t vo -n -v) > /dev/null 2>&1'%reassemble(contract))
+os.system('echo %s | python3 vandal/bin/decompile -t vo -n'%reassemble(contract))
 
 # find jump dests, assign them labels
 i=0
