@@ -25,6 +25,37 @@ sudo add-apt-repository ppa:ethereum/ethereum
 sudo apt-get update
 sudo apt-get install solc
 ```
+## Usage
+Run `POC.py` with the input file containing the contract bytecode and the 4-byte hash of the function that should be modified and it will write the modified bytecode to the output file:
+
+```
+usage: POC.py [-h] inputfile outputfile functionhash
+```
+
+You can deploy a contract (or use an already existing one at a given address) and start searching for a counterexample using `TestContract.py`:
+
+```
+usage: TestContract.py [-h] (-p PARAM | -a ADDRESS) [-t TARGET] [-i ITERATIONS] [-s] contract
+
+Test a given contract by deploying and executing it.
+
+positional arguments:
+  contract              path to the contracts .abi and .bin.patched file
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -p PARAM, --param PARAM
+                        deploy the challenge contract with given parameters for the constructor
+  -a ADDRESS, --address ADDRESS
+                        use already created contract with given address
+  -t TARGET, --target TARGET
+                        set the PoW hash limit for a reward
+  -i ITERATIONS, --iterations ITERATIONS
+                        maximum number of different inputs given to offChain
+  -s, --submit          submit inputs on-chain if they will be rewarded (counterexample/hash below target)
+```
+
+You can also use `./runAll.sh` to recompile all example contracts, modify their bytecode, deploy them and submit transactions that are eligible for a reward, all at once.
 
 ## Example Contracts
 There are 4 different example contracts, which got compiled, modified and deployed:
