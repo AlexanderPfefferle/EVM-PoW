@@ -1,7 +1,7 @@
 import argparse
-import os
 from copy import deepcopy
 from opcodes import *
+from vandal_parser import *
 
 if __name__ == '__main__':
     arg_parser = argparse.ArgumentParser(description="Modify EVM Bytecode such that it computes a hash unique to the executed code.")
@@ -11,55 +11,52 @@ if __name__ == '__main__':
     args = arg_parser.parse_args()
 
 bytecode = open(args.inputfile).read().strip().upper()
-
-funcsighash=args.functionhash.upper()
 # assumes solc gets executed with "--metadata-hash none", you would need a CBOR parser,
 # to handle arbitrary metadata at the end, https://docs.soliditylang.org/en/v0.8.5/metadata.html
 metadata_bytes = "a164736f6c6343".upper()
 begin_metadata_bytes = bytecode.find(metadata_bytes,0)
-
 bytecode=bytecode[:begin_metadata_bytes]
 
 set_leading_zeros = lambda x: "{0:0{1}x}".format(x,4).upper()
 
-byte_array = [bytecode[i]+bytecode[i+1] for i in range(0,len(bytecode)-1,2)]
+contract_bytes = [bytecode[i]+bytecode[i+1] for i in range(0,len(bytecode)-1,2)]
 
-lbl_index=0
-jumpdests=[]
-pushes=[]
-
-old_address_to_label=dict()
-
-contract=[]
 # disassemble
-c=0
-i=0
-while c<len(byte_array):
-    op=byte_array[c]
-    extra=opcodes[op]["extra_in"]
-    params=byte_array[c+1:c+1+extra]
-    contract+=[[op, params, None]]
-    c+=extra+1
-    i+=1+len(params)
+def disassemble(contract_bytes):
+    contract=[]
+    c=0
+    i=0
+    while c<len(contract_bytes):
+        op=contract_bytes[c]
+        extra=opcodes[op]["extra_in"]
+        params=contract_bytes[c+1:c+1+extra]
+        contract+=[[op, params, None]]
+        c+=extra+1
+        i+=1+len(params)
+    return contract
+
+contract=disassemble(contract_bytes)
 
 # find index to split code from constructor
-i=0
-constructor_length=None
-constructor_end_index=None
-for x in range(len(contract)):
-    if opcodes[contract[x][0]]["name"]=="CODECOPY":
-        constructor_length=int(''.join(contract[x-2][1]),16)
-    i+=1+len(contract[x][1])
+def split_code_constructor(contract):
+    i=0
+    constructor_length=None
+    constructor_end_index=None
+    for x in range(len(contract)):
+        if opcodes[contract[x][0]]["name"]=="CODECOPY":
+            constructor_length=int(''.join(contract[x-2][1]),16)
+        i+=1+len(contract[x][1])
 
-i=0
-for x in range(len(contract)):
-    if i==constructor_length:
-        constructor_end_index=x
-        break
-    i+=1+len(contract[x][1])
+    i=0
+    for x in range(len(contract)):
+        if i==constructor_length:
+            constructor_end_index=x
+            break
+        i+=1+len(contract[x][1])
+    contract, constructor = contract[constructor_end_index:], contract[:constructor_end_index]
+    return contract, constructor
 
-contract, constructor = contract[constructor_end_index:], contract[:constructor_end_index]
-
+contract, constructor = split_code_constructor(contract)
 # move initial FMP
 contract[0][1]=["C0"]
 
@@ -87,72 +84,83 @@ def reassemble(contract):
             new_bytecode += ''.join(params)
     return new_bytecode
 
-# run vandal, only works on linux this way
-os.system('echo %s | python3 vandal/bin/decompile -t vo -n'%reassemble(contract))
+jumppc_to_pushpc, blocks_list, func_to_blocks = run_and_parse_vandal(reassemble(contract))
 
-# find jump dests, assign them labels
-i=0
-for x in range(len(contract)):
-    op,params,_ = contract[x]
-    if opcodes[op]["name"]=="JUMPDEST":
-        contract[x][2]="LBL%d"%lbl_index
-        old_address_to_label[i]="LBL%d"%lbl_index
-        lbl_index+=1
-    i+=1+len(params)
+def assign_labels(contract):
+    # find jump dests, assign them labels
+    old_address_to_label=dict()
+    lbl_index=0
+    i=0
+    for x in range(len(contract)):
+        op,params,_ = contract[x]
+        if opcodes[op]["name"]=="JUMPDEST":
+            contract[x][2]="LBL%d"%lbl_index
+            old_address_to_label[i]="LBL%d"%lbl_index
+            lbl_index+=1
+        i+=1+len(params)
 
+    unsolved_jump_pcs=[]
 
-unsolved_jump_pcs=[]
+    # assign labels to static jumps
+    i=0
+    for x in range(1,len(contract)):
+        p_op,p_params,p_lbl = contract[x-1]
+        op,params,lbl = contract[x]
+        if (opcodes[op]["name"] in {"JUMP", "JUMPI"}):
+            if opcodes[p_op]["name"][:4] == "PUSH":
+                contract[x-1][2]=old_address_to_label[int(''.join(p_params),16)]
+            else:
+                unsolved_jump_pcs+=[i+1]
+        i+=1+len(p_params)
 
-# assign labels to static jumps
-i=0
-for x in range(1,len(contract)):
-    p_op,p_params,p_lbl = contract[x-1]
-    op,params,lbl = contract[x]
-    if (opcodes[op]["name"] in {"JUMP", "JUMPI"}):
-        if opcodes[p_op]["name"][:4] == "PUSH":
-            contract[x-1][2]=old_address_to_label[int(''.join(p_params),16)]
-        else:
-            unsolved_jump_pcs+=[i+1]
-    i+=1+len(p_params)
+    # assign labels to dynamic jumps
+    # requires running vandal and parsing the output files
+    unsolved_push_pcs=[]
+    for x in unsolved_jump_pcs:
+        unsolved_push_pcs+=jumppc_to_pushpc(x)
 
-# assign labels to dynamic jumps
-# requires running vandal and parsing the output files
-from vandal_parser import *
-unsolved_push_pcs=[]
-for x in unsolved_jump_pcs:
-    unsolved_push_pcs+=jumppc_to_pushpc(x)
+    i=0
+    for x in range(0,len(contract)):
+        op,params,lbl = contract[x]
+        if i in unsolved_push_pcs:
+            unsolved_push_pcs.remove(i)
+            if opcodes[op]["name"][:4]=="PUSH" and int(''.join(params),16) in old_address_to_label.keys():
+                contract[x][2]=old_address_to_label[int(''.join(params),16)]
+        i+=1+len(params)
+    return old_address_to_label
 
-i=0
-for x in range(0,len(contract)):
-    op,params,lbl = contract[x]
-    if i in unsolved_push_pcs:
-        unsolved_push_pcs.remove(i)
-        if opcodes[op]["name"][:4]=="PUSH" and int(''.join(params),16) in old_address_to_label.keys():
-            contract[x][2]=old_address_to_label[int(''.join(params),16)]
-    i+=1+len(params)
+old_address_to_label=assign_labels(contract)
 
-block_ranges=[]
-for block in func_to_blocks['0x'+funcsighash.lower()]:
-    i = blocks_list.index(block)
-    block_ranges.append((block,blocks_list[i+1]-1))
+def find_offchain_blocks(func_to_blocks, blocks_list, offchain_function_hash):
+    block_ranges=[]
+    for block in func_to_blocks['0x'+offchain_function_hash]:
+        i = blocks_list.index(block)
+        block_ranges.append((block,blocks_list[i+1]-1))
+    return block_ranges
+
+block_ranges=find_offchain_blocks(func_to_blocks, blocks_list, args.functionhash.lower())
+
 # find all the JUMPDESTs where we return from an internal function call,
 # since we want to include these return values in the hash as well
-internal_function_call_returns=[]
-i=0
-for x in range(len(contract)):
-    op,params,lbl = contract[x]
-    current_block_start=None
-    current_block_end=None
-    for l1,l2 in block_ranges:
-        if l1 <= i <= l2:
-            current_block_start=l1
-            current_block_end=l2
-            break
-    if current_block_start and current_block_start <= i <= current_block_end \
-       and old_address_to_label.get(current_block_end+1,0)==lbl and opcodes[op]["name"][:4]=="PUSH":
-        internal_function_call_returns+=[i]
-    i+=1+len(params)
+def find_internal_call_returns(contract, old_address_to_label, block_ranges):
+    internal_function_call_returns=[]
+    i=0
+    for x in range(len(contract)):
+        op,params,lbl = contract[x]
+        current_block_start=None
+        current_block_end=None
+        for l1,l2 in block_ranges:
+            if l1 <= i <= l2:
+                current_block_start=l1
+                current_block_end=l2
+                break
+        if current_block_start and current_block_start <= i <= current_block_end \
+           and old_address_to_label.get(current_block_end+1,0)==lbl and opcodes[op]["name"][:4]=="PUSH":
+            internal_function_call_returns+=[i]
+        i+=1+len(params)
+    return internal_function_call_returns
 
+internal_function_call_returns=find_internal_call_returns(contract, old_address_to_label, block_ranges)
 
 # create the code we will inject
 make_hash_of_top=[
@@ -193,7 +201,7 @@ mhbt = assemble(make_hash_of_below_top)
 # 2 bytes are enought to cover the largest possible PCs,
 # there might have been PUSH1s before, but 1 byte might not be enough after
 # injecting additional code
-def make_pushes_big():
+def make_pushes_big(contract):
     for x in range(len(contract)):
         op,params,lbl=contract[x]
         if lbl and opcodes[op]["name"] != "JUMPDEST":
@@ -226,7 +234,7 @@ pre2_ops={
     "MSTORE8",
 }
 
-def inject_code():
+def inject_code(contract, block_ranges):
     new_contract=[]
     i=0
     for x in range(len(contract)):
@@ -247,11 +255,6 @@ def inject_code():
             new_contract+=mht
         i+=1+len(params)
     return new_contract
-
-contract=inject_code()
-make_pushes_big()
-
-new_bytecode=reassemble(contract)
 
 def fix_constructor(new_code_size):
     new_constructor_bytecode=""
@@ -295,6 +298,10 @@ def fix_constructor(new_code_size):
         else:
             new_constructor_bytecode += ''.join(params)
     return new_constructor_bytecode
+
+contract=inject_code(contract, block_ranges)
+make_pushes_big(contract)
+new_bytecode=reassemble(contract)
 
 cc=fix_constructor(int(hex(len(new_bytecode)//2)[2:].upper(),16))
 
