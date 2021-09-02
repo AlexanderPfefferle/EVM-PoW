@@ -2,6 +2,18 @@ import os
 from collections import defaultdict
 
 def run_and_parse_vandal(bytecode):
+    """
+    runs vandal with the given bytecode and parses it's output
+
+    returns jumppc_to_pushpc, blocks_list, func_to_blocks
+        jumppc_to_pushpc: maps a JUMP to the PUSH that puts
+                          the destination address on the stack
+        blocks_list: list of code blocks
+        func_to_blocks: maps a 4-byte hash of a function signature to
+                        the respective code blocks that
+                        implemented the function
+    """
+    #run vandal
     os.system('echo %s | python3 vandal/bin/decompile -t vo -n'%bytecode)
     parse_file=lambda x:[l.split('\t') for l in open(x,'r').read().strip().split('\n')]
     # use.facts -> where does a variable get used

@@ -5,8 +5,20 @@ from vandal_parser import *
 
 set_leading_zeros = lambda x: "{0:0{1}x}".format(x,4).upper()
 
-# disassemble
 def disassemble(contract_bytes):
+    """
+    disassemble a given list of bytes
+
+    each byte is represented as a hex string of length 2
+
+    returns a list of operations,
+    where an operation is represented as a list itself:
+    [op, params, label]
+        op: the opcode
+        params: the array of bytes that will get pushed if opcode is a PUSH,
+                [] otherwise
+        label: initially None, will later be used for labeling JUMPDESTs/PUSHs
+    """
     contract=[]
     c=0
     i=0
@@ -19,8 +31,12 @@ def disassemble(contract_bytes):
         i+=1+len(params)
     return contract
 
-# find index to split code from constructor
 def split_code_constructor(contract):
+    """
+    split the constructor from the actual contract that will be deployed
+
+    searches for the parameter that CODECOPY uses, to decide where to split
+    """
     i=0
     constructor_length=None
     constructor_end_index=None
@@ -38,10 +54,12 @@ def split_code_constructor(contract):
     contract, constructor = contract[constructor_end_index:], contract[:constructor_end_index]
     return contract, constructor
 
-# reassemble the list of operations back to bytecode
-# this also replaces the labels for JUMPDESTs and their
-# corresponding pushes with addresses again
 def reassemble(contract):
+    """
+    reassemble the list of operations back to bytecode
+    this also replaces the labels for JUMPDESTs and their
+    corresponding pushes with addresses again
+    """
     new_bytecode=""
     new_jump_dests=dict()
     i=0
@@ -62,7 +80,16 @@ def reassemble(contract):
             new_bytecode += ''.join(params)
     return new_bytecode
 
-def assign_labels(contract):
+def assign_labels(contract, jumppc_to_pushpc):
+    """
+    assign labels to JUMPDESTs
+    and the corresponding PUSHs that put a
+    jump destination address on the stack
+
+    (requires jumppc_to_pushpc from the vandal parser,
+    to assign the correct labels for dynamic jumps)
+    """
+
     # find jump dests, assign them labels
     old_address_to_label=dict()
     lbl_index=0
@@ -90,7 +117,6 @@ def assign_labels(contract):
         i+=1+len(p_params)
 
     # assign labels to dynamic jumps
-    # requires running vandal and parsing the output files
     unsolved_push_pcs=[]
     for x in unsolved_jump_pcs:
         unsolved_push_pcs+=jumppc_to_pushpc(x)
@@ -106,15 +132,22 @@ def assign_labels(contract):
     return old_address_to_label
 
 def find_offchain_blocks(func_to_blocks, blocks_list, offchain_function_hash):
+    """
+    given the 4-byte hash of the offchain function signature,
+    find all the blocks of the code, that are part of the implementation
+    of the function
+    """
     block_ranges=[]
     for block in func_to_blocks['0x'+offchain_function_hash]:
         i = blocks_list.index(block)
         block_ranges.append((block,blocks_list[i+1]-1))
     return block_ranges
 
-# find all the JUMPDESTs where we return from an internal function call,
-# since we want to include these return values in the hash as well
 def find_internal_call_returns(contract, old_address_to_label, block_ranges):
+    """
+    find all the JUMPDESTs where we return from an internal function call,
+    since we want to include these return values in the hash as well
+    """
     internal_function_call_returns=[]
     i=0
     for x in range(len(contract)):
@@ -132,11 +165,13 @@ def find_internal_call_returns(contract, old_address_to_label, block_ranges):
         i+=1+len(params)
     return internal_function_call_returns
 
-# make sure all PUSHs that put a jumpdest address on the stack are PUSH2;
-# 2 bytes are enought to cover the largest possible PCs,
-# there might have been PUSH1s before, but 1 byte might not be enough after
-# injecting additional code
 def make_pushes_big(contract):
+    """
+    make sure all PUSHs that put a jumpdest address on the stack are PUSH2;
+    2 bytes are enough to cover the largest possible PCs,
+    there might have been PUSH1s before, but 1 byte might not be enough after
+    injecting additional code
+    """
     for x in range(len(contract)):
         op,params,lbl=contract[x]
         if lbl and opcodes[op]["name"] != "JUMPDEST":
@@ -166,6 +201,10 @@ make_hash_of_below_top=deepcopy(make_hash_of_top)
 make_hash_of_below_top[0][0]="DUP2"
 
 def assemble(op_list):
+    """
+    Given a humanly readable list of opcodes,
+    return a list of operations
+    """
     nl=[]
     for e in op_list:
         if len(e) == 2:
@@ -201,6 +240,10 @@ pre2_ops={
 }
 
 def inject_code(contract, block_ranges, internal_function_call_returns):
+    """
+    iterate over all operations and inject the code to update the hash
+    before/after the corresponding opcodes
+    """
     new_contract=[]
     mht = assemble(make_hash_of_top)
     mhbt = assemble(make_hash_of_below_top)
@@ -225,6 +268,11 @@ def inject_code(contract, block_ranges, internal_function_call_returns):
     return new_contract
 
 def fix_constructor(constructor, new_code_size):
+    """
+    reassembles a constructor,
+    fixes CODECOPYs by adjusting the values that get pushed
+    on the stack
+    """
     new_constructor_bytecode=""
     # find PUSHs of last CODECOPY
     for x in range(len(constructor)-1,-1,-1):
@@ -284,16 +332,16 @@ if __name__ == '__main__':
 
     contract=disassemble(contract_bytes)
     contract, constructor = split_code_constructor(contract)
-    contract[0][1]=["C0"] # move initial FMP
-
+    contract[0][1]=["C0"] # move initial free memory pointer
+    # assign labels
     jumppc_to_pushpc, blocks_list, func_to_blocks = run_and_parse_vandal(reassemble(contract))
-    old_address_to_label=assign_labels(contract)
-
+    old_address_to_label=assign_labels(contract, jumppc_to_pushpc)
+    # modify code
     block_ranges=find_offchain_blocks(func_to_blocks, blocks_list, args.functionhash.lower())
     internal_function_call_returns=find_internal_call_returns(contract, old_address_to_label, block_ranges)
     contract=inject_code(contract, block_ranges, internal_function_call_returns)
     make_pushes_big(contract)
-
+    # remove labels
     new_bytecode=reassemble(contract)
     cc=fix_constructor(constructor, int(hex(len(new_bytecode)//2)[2:].upper(),16))
 
